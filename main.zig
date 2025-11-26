@@ -22,9 +22,9 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
     , .{args[0]});
     const port = std.fmt.parseUnsigned(u16, args[1], 10) catch die("{s}: invalid port", .{args[1]});
     const mode = std.meta.stringToEnum(Mode, args[2]) orelse die("{s}: invalid mode", .{args[2]});
-    const sleep_s = std.fmt.parseFloat(f64, args[4]) catch die("{s}: invalid sleep", .{args[3]});
+    const sleep_s = std.fmt.parseFloat(f64, args[3]) catch die("{s}: invalid sleep", .{args[3]});
     const sleep = std.Io.Duration.fromNanoseconds(@intFromFloat(sleep_s * std.time.ns_per_s));
-    const limit = std.fmt.parseUnsigned(usize, args[3], 10) catch die("{s}: invalid limit", .{args[4]});
+    const limit = std.fmt.parseUnsigned(usize, args[4], 10) catch die("{s}: invalid limit", .{args[4]});
     return Args{ .port = port, .mode = mode, .limit = limit, .sleep = sleep };
 }
 

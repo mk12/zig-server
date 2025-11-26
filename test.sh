@@ -39,7 +39,7 @@ pids=()
 trap 'kill "${pids[@]}" &> /dev/null || :' EXIT
 
 echo "Starting server: port = $port, mode = $mode, sleep = ${sleep}s, limit = $limit"
-"$exe" "$port" "$mode" "$limit" "$sleep" & pids+=($!)
+"$exe" "$port" "$mode" "$sleep" "$limit" & pids+=($!)
 
 echo "Monitoring RSS"
 ( while :; do echo "RSS =$(ps -o rss= -p "${pids[0]}")"; sleep 1; done ) & pids+=($!)
