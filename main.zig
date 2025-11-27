@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Mode = enum { serial, forget, group, waiter, select, workers };
+const Mode = enum { serial, forget, group, waiter, waiter2, workers, select };
 
 const Args = struct { port: u16, mode: Mode, limit: usize, sleep: std.Io.Duration };
 
@@ -67,15 +67,33 @@ fn run(io: std.Io, server: *std.Io.net.Server, mode: Mode, limit: usize, sleep: 
             // Use group.concurrent once https://github.com/ziglang/zig/pull/26036 hits nightly.
             for (0..limit) |_| group.async(io, handle, .{ io, try server.accept(io), sleep });
         },
-        // Use io.concurrent spawn a task whose only job is to await futures.
+        // Use io.concurrent to spawn a task whose only job is to await futures.
         // PROBLEM: unbounded memory growth!
         // (And even if it worked, one slow request starves cleanup of others.)
         .waiter => {
             var buffer: [16]std.Io.Future(void) = undefined;
             var queue: std.Io.Queue(std.Io.Future(void)) = .init(&buffer);
-            var future = try io.concurrent(waiter, .{ io, &queue });
-            defer future.cancel(io);
-            for (0..limit) |_| try queue.putOne(io, try io.concurrent(handle, .{ io, try server.accept(io), sleep }));
+            var total: usize = 0;
+            var awaited = try io.concurrent(waiter, .{ io, &queue });
+            defer cancelOutstanding(io, &queue, total - awaited.cancel(io));
+            while (total < limit) : (total += 1) {
+                try queue.putOne(io, try io.concurrent(handle, .{ io, try server.accept(io), sleep }));
+            }
+        },
+        // Like Mode.waiter, but tasks enqueue themselves once they're done.
+        // This idea comes from kprotty.
+        // PROBLEM: unbounded memory growth!
+        // (But it avoids the cleanup starving problem of Mode.waiter.)
+        .waiter2 => {
+            var buffer: [16]std.Io.Future(void) = undefined;
+            var queue: std.Io.Queue(std.Io.Future(void)) = .init(&buffer);
+            var total: usize = 0;
+            var awaited = try io.concurrent(waiter, .{ io, &queue });
+            defer cancelOutstanding(io, &queue, total - awaited.cancel(io));
+            while (total < limit) : (total += 1) {
+                var oneshot: std.Io.Queue(std.Io.Future(void)) = .init(&.{});
+                try oneshot.putOne(io, try io.concurrent(handleAndEnqueue, .{ io, &oneshot, &queue, try server.accept(io), sleep }));
+            }
         },
         // Spawn a fixed number of workers.
         // PROBLEM: this is just threads with extra steps! IO is supposed to manage this for us!
@@ -118,14 +136,40 @@ fn run(io: std.Io, server: *std.Io.net.Server, mode: Mode, limit: usize, sleep: 
     }
 }
 
-// Used for Mode.waiter.
-fn waiter(io: std.Io, queue: *std.Io.Queue(std.Io.Future(void))) void {
+// Used for Mode.waiter and Mode.waiter2.
+// Returns the number of futures awaited.
+fn waiter(io: std.Io, queue: *std.Io.Queue(std.Io.Future(void))) usize {
+    var awaited: usize = 0;
     while (true) {
         var future = queue.getOne(io) catch |err| switch (err) {
-            error.Canceled => break,
+            error.Canceled => return awaited,
         };
         future.await(io);
+        awaited += 1;
     }
+}
+
+// Used for Mode.waiter and Mode.waiter2.
+fn cancelOutstanding(io: std.Io, queue: *std.Io.Queue(std.Io.Future(void)), outstanding: usize) void {
+    for (0..outstanding) |_| {
+        var future = queue.getOneUncancelable(io);
+        future.cancel(io);
+    }
+}
+
+// Used for Mode.waiter2.
+fn handleAndEnqueue(
+    io: std.Io,
+    oneshot: *std.Io.Queue(std.Io.Future(void)),
+    queue: *std.Io.Queue(std.Io.Future(void)),
+    stream: std.Io.net.Stream,
+    sleep: std.Io.Duration,
+) void {
+    // Uncancelable because it should be there right away.
+    const my_own_future = oneshot.getOneUncancelable(io);
+    handle(io, stream, sleep);
+    // Uncancelable because otherwise we leak the future.
+    queue.putOneUncancelable(io, my_own_future);
 }
 
 // Used for Mode.workers.

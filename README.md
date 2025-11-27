@@ -35,6 +35,7 @@ Here are the server implementations (called "mode" in the code):
 * `forget`: leak all the futures
 * `group`: use `std.Io.Group`
 * `waiter`: spawn a task that awaits futures
+* `waiter2`: like `waiter` but a bit more clever
 * `workers`: use a fixed number of workers
 * `select`: use select to juggle 1 accept and N handlers
 
